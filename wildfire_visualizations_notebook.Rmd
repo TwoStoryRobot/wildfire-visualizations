@@ -1,0 +1,297 @@
+---
+title: "Wildfire Visualizations Notebook"
+output: html_notebook
+---
+
+```{r}
+library(jsonlite)
+library(chron)
+library(ggplot2)
+library(naniar)
+library(plotly)
+library(ggplot2)
+library(dplyr) # easier data wrangling 
+library(viridis) # colour blind friendly palette, works in B&W also
+library(Interpol.T) #  will generate a large dataset on initial load
+library(lubridate) # for easy date manipulation
+library(ggExtra) # because remembering ggplot theme options is beyond me
+```
+
+### Read station meta data
+```{r}
+station_meta_data = read_json('station_meta_data.json', simplifyVector = TRUE)
+#View(station_meta_data)
+```
+
+```{r}
+  # data <- stream_in(file("dataNDJSON.json"),pagesize = 10)
+  # flat_data <- flatten(data, recursive = TRUE)
+```
+
+
+### Generate list of station data frames and include meta data
+```{r echo = T, results = 'hide', warning=FALSE}
+NETWORK <- "FLNRO-WMB"
+
+all_headers <- c("wind_direction", "rel_hum", "avg_wnd_spd_10m_pst10mts", "precipitation", "dwpt_temp", "wind_speed", "air_temp", "temperature", "rnfl_amt_pst1hr", "avg_wnd_dir_10m_pst10mts", "rnfl_amt_pst24hrs", "relative_humidity", "time", "snw_dpth", "network_name", "native_id", "station_name", "lon", "lat", "elev", "min_obs_time", "max_obs_time", "freq", "province", "station_id", "history_id", "description", "network_id", "col_hex","vars","display_names")     
+
+stationFiles <- list.files(path=NETWORK, pattern="*.ascii", full.names=FALSE, recursive=FALSE)
+
+list_of_station_df <- lapply(stationFiles, function(fileName) {
+  
+  station_df <- read.csv(file = paste(NETWORK, fileName, sep="/"), sep=',', strip.white=TRUE, skip = 1)
+  station_id <- gsub("*.ascii", "", fileName)
+  
+  station_meta_data_headers = names(station_meta_data[[station_id]])
+  
+  
+  # Add meta data to every row in station_df
+  for(header in station_meta_data_headers) {
+    station_df[,header] <- c(rep(station_meta_data[[station_id]][[header]], nrow(station_df)))
+
+  }
+  
+  # Add headers if they don't exist, so all df's have same headers
+  station_df[all_headers[!(all_headers %in% colnames(station_df))]] = NA
+  
+  # Delete useless columns
+  station_df$display_names <- NULL
+  station_df$vars <- NULL
+
+  # Convert these columns to numeric type
+  station_df$wind_direction = as.numeric(station_df$wind_direction)
+  station_df$rel_hum = as.numeric(station_df$rel_hum)
+  station_df$precipitation = as.numeric(station_df$precipitation)
+  station_df$wind_speed = as.numeric(station_df$wind_speed)
+  station_df$temperature = as.numeric(station_df$temperature)
+  station_df$avg_wnd_dir_10m_pst10mts = as.numeric(station_df$avg_wnd_dir_10m_pst10mts)
+  station_df$relative_humidity = as.numeric(station_df$relative_humidity)
+  station_df$snw_dpth = as.numeric(station_df$snw_dpth)
+  station_df$lon = as.numeric(station_df$lon)
+  station_df$lat = as.numeric(station_df$lat)
+  station_df$elev = as.numeric(station_df$elev)
+  station_df$air_temp = as.numeric(station_df$air_temp)
+  station_df$dwpt_temp = as.numeric(station_df$dwpt_temp)
+  station_df$freq = as.numeric(station_df$freq)
+  station_df$rnfl_amt_pst24hrs = as.numeric(station_df$rnfl_amt_pst24hrs)
+  # tation_df$time = as.POSIXct(station_df$time)
+  
+  
+  return(station_df)
+})
+```
+
+### Confirm data types are appropriate
+```{r}
+# Check types of all columns in a data frame
+sapply(list_of_station_df[[67]], mode)
+```
+
+### Inspect a single weather station
+
+```{r}
+
+# Get the 1st df (for example..)
+df_1 = list_of_station_df[[1]]
+```
+### Visualize missing data for relevent variables 
+```{r}
+df_1_relevant = df_1[, c("wind_speed", "rel_hum", "precipitation", "relative_humidity", "wind_direction", "temperature", "air_temp", "time")]
+
+gg_miss_var(df_1_relevant)
+
+```
+### Heat Map
+
+```{r}
+
+# Create df for heat map
+df_heatmap <- data.frame(matrix(ncol = 0, nrow = nrow(df_1)))
+df_heatmap$stationid <- df_1$station_id
+df_heatmap$day <- day(as.POSIXct(df_1$time))
+df_heatmap$hour <- hour(as.POSIXct(df_1$time))
+df_heatmap$month <- month(as.POSIXct(df_1$time))
+df_heatmap$year <- year(as.POSIXct(df_1$time))
+df_heatmap$temp <- df_1$temperature
+
+#sapply(df_heatmap, mode)
+
+# Only use rows for year 2020
+df_heatmap <- df_heatmap[df_heatmap$year == 2020,]
+```
+
+
+
+```{r}
+
+
+# Look into more specialist way of replacing these missing values -e.g. imputation or IDW interpolation
+ 
+df <- df_heatmap
+
+statno <-unique(df$stationid)
+ 
+######## Plotting starts here#####################
+p <-ggplot(df,aes(day,hour,fill=temp))+
+  geom_tile(color= "white",size=0.1) + 
+  scale_fill_viridis(name="Hrly Temps C",option ="C")
+p <-p + facet_grid(year~month)
+p <-p + scale_y_continuous(trans = "reverse", breaks = unique(df$hour))
+p <-p + scale_x_continuous(breaks =c(1,10,20,31))
+p <-p + theme_minimal(base_size = 8)
+p <-p + labs(title= paste("Hourly Temps - Station",statno), x="Day", y="Hour Commencing")
+p <-p + theme(legend.position = "bottom")+
+  theme(plot.title=element_text(size = 14))+
+  theme(axis.text.y=element_text(size=6)) +
+  theme(strip.background = element_rect(colour="white"))+
+  theme(plot.title=element_text(hjust=0))+
+  theme(axis.ticks=element_blank())+
+  theme(axis.text=element_text(size=7))+
+  theme(legend.title=element_text(size=8))+
+  theme(legend.text=element_text(size=6))+
+  removeGrid()#ggExtra
+ 
+# you will want to expand your plot screen before this bit!
+p #awesomeness
+```
+### Time Series
+
+```{r}
+temp_df_1 <- data.frame(
+  day = as.POSIXct(df_1$time),
+  value = df_1$temperature
+)
+
+rel_hum_df_1 <- data.frame(
+  day = as.POSIXct(df_1$time),
+  value = df_1$relative_humidity
+)
+
+precip_df_1 <- data.frame(
+  day = as.POSIXct(df_1$time),
+  value = df_1$precipitation
+)
+
+```
+
+
+```{r}
+# Libraries
+library(ggplot2)
+library(dplyr)
+library(hrbrthemes)
+
+# # Dummy data
+# data <- data.frame(
+#   day = df_1$time,
+#   value = df_1$temperature
+# )
+
+createTimeSeries <- function (data, y_lab) {
+
+  # Most  plot
+  p <- ggplot(data, aes(x=day, y=value, group = 1)) +
+    geom_line(color="steelblue") +
+    geom_smooth(method="auto", se=TRUE, fullrange=FALSE, level=0.95, color="grey") +
+    xlab("") +
+    ylab(y_lab) +
+    theme_ipsum() +
+    theme(axis.text.x=element_text(angle=60, hjust=1))
+  
+  p <- ggplotly(p)
+  
+  p
+}
+
+```
+
+```{r}
+createTimeSeries(temp_df_1, "Temperature")
+
+```
+
+```{r}
+createTimeSeries(rel_hum_df_1, "Relative Humidity")
+```
+
+```{r}
+createTimeSeries(precip_df_1, "Precipitation")
+
+```
+
+```{r}
+# Get min and max rel_hum
+max_rel_hum = max(df_1$rel_hum, na.rm = TRUE)
+min_rel_hum = min(df_1$rel_hum, na.rm = TRUE)
+
+min_time = min(df_1$time, na.rm = TRUE)
+max_time = max(df_1$time, na.rm = TRUE)
+
+# Get the min and max time of all the data
+min_time_all = min(unlist(lapply(list_of_station_df, function(df) {
+  return(min(df$time, na.rm = TRUE))
+})))
+
+max_time_all = max(unlist(lapply(list_of_station_df, function(df) {
+  return(max(df$time, na.rm = TRUE))
+})))
+
+print(min_time_all)
+print(max_time_all)
+
+print(as.POSIXct(min_time_all))
+print(as.POSIXct(max_time_all))
+```
+
+### Generate list of hours between min and max time 
+
+```{r}
+time_range_hours <- seq(as.POSIXct(min_time_all), as.POSIXct(max_time_all), by="hour")
+time_range_hours <- lapply(time_range_hours, function(hour) as.POSIXct(hour, format="%d-%b-%Y %H:%M:%OS"))
+#print(time_range_hours[1:2])
+#print(typeof(time_range_hours[[1]]))
+#print(as.character(time_range_hours[[length(time_range_hours)]]))
+print(time_range_hours[1:3])
+
+```
+
+
+### Create list of df's for every hour
+
+
+```{r}
+list_of_hourly_station_df = list()
+
+for(time in time_range_hours) {
+  df <- data.frame(matrix(ncol = length(all_headers), nrow = 0))
+  colnames(df) <- all_headers
+  
+  list_of_hourly_station_df[[as.character(time)]] = df
+
+}
+
+
+```
+
+
+```{r}
+for(station_df in list_of_station_df[1]) {
+  
+  for (rowNum in 1:nrow(station_df)) {
+  
+    time <- as.POSIXct(station_df[rowNum, "time"])
+    hour_df = list_of_hourly_station_df[[as.character(time)]]
+    
+    #list_of_hourly_station_df[[as.character(time)]] = rbind(hour_df, station_df[rowNum,])
+    
+    print(station_df[rowNum,])
+    
+    hour_df[nrow(hour_df) + 1,] = station_df[rowNum,]    
+    list_of_hourly_station_df[[as.character(time)]] = hour_df
+
+
+  }
+}
+```
+
+
